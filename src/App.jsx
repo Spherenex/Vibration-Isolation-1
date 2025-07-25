@@ -39,8 +39,8 @@ function App() {
       {/* <Home/> */}
       {/* <Waste_detection /> */}
       {/* <UV/> */}
-      <Vibration_Isolation />
-      {/* <Vibratio_Isolation11 /> */}
+      {/* <Vibration_Isolation /> */}
+      <Vibratio_Isolation11 />
     </>
   )
 }

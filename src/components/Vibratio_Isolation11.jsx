@@ -19,29 +19,37 @@ const Dashboard = () => {
   const [chartColumn, setChartColumn] = useState(null);
   const [latestEntry, setLatestEntry] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [electricalData, setElectricalData] = useState([]);
+  const [latestElectricalEntry, setLatestElectricalEntry] = useState(null);
   const [rmsMode, setRmsMode] = useState('standard');
   const [showDebugInfo, setShowDebugInfo] = useState(false);
 
   const fetchData = async () => {
     try {
-      // ✅ UPDATED: Fetch from your new Google Sheets URL
-      const response = await fetch("https://docs.google.com/spreadsheets/d/1b2y2t-R3VPtomAQvhB1Jy4xYQb7WblQrGqCyZyihFuk/export?format=csv&gid=0");
-      const text = await response.text();
-      const result = Papa.parse(text, {
+      const response1 = await fetch("https://docs.google.com/spreadsheets/d/1b2y2t-R3VPtomAQvhB1Jy4xYQb7WblQrGqCyZyihFuk/export?format=csv&gid=0");
+      const text1 = await response1.text();
+      const result1 = Papa.parse(text1, {
         header: true,
         dynamicTyping: true,
         skipEmptyLines: true,
         delimitersToGuess: [',', '\t', '|', ';']
       });
 
-      // Process data WITH S1/S2 INTERCHANGE
-      if (result.data && result.data.length > 0) {
-        const processedData = result.data.map(row => {
+      const response2 = await fetch("https://docs.google.com/spreadsheets/d/1j2NNnnOOuWByhBuxfowBKnOC8u6sEcIZP0b9q_eEtBg/export?format=csv&gid=0");
+      const text2 = await response2.text();
+      const result2 = Papa.parse(text2, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        delimitersToGuess: [',', '\t', '|', ';']
+      });
+
+      if (result1.data && result1.data.length > 0) {
+        const processedData = result1.data.map(row => {
           const newRow = { ...row };
-          // ✅ MAINTAIN S1/S2 INTERCHANGE
           if (typeof row.S1 === 'number' && typeof row.S2 === 'number') {
-            newRow.S1 = row.S2; // S1 now gets original S2 values
-            newRow.S2 = row.S1; // S2 now gets original S1 values
+            newRow.S1 = row.S2;
+            newRow.S2 = row.S1;
           }
           return newRow;
         });
@@ -57,6 +65,11 @@ const Dashboard = () => {
         if (numericalColumns.length > 0 && !chartColumn) {
           setChartColumn(numericalColumns[0]);
         }
+      }
+
+      if (result2.data && result2.data.length > 0) {
+        setElectricalData(result2.data);
+        setLatestElectricalEntry(result2.data[result2.data.length - 1]);
       }
 
       setLoading(false);
@@ -88,6 +101,28 @@ const Dashboard = () => {
   const headers = Object.keys(data[0]);
   const numericalColumns = headers.filter(header => typeof data[0][header] === 'number');
 
+  const electricalHeaders = electricalData.length > 0 ? Object.keys(electricalData[0]) : [];
+  const electricalNumericalColumns = electricalHeaders.filter(header =>
+    electricalData.length > 0 && typeof electricalData[0][header] === 'number'
+  );
+
+  // ✅ NEW: Power vs Voltage data preparation
+  const preparePowerVoltageData = () => {
+    return electricalData.map((item, index) => {
+      const voltage = item.Voltage_V || 0;  // Y-axis data (vertical/left side)
+      const power = item.Power_W || 0;      // X-axis data (horizontal/bottom)
+      
+      return {
+        time: index,
+        power: power,        // X-axis data (horizontal/bottom)
+        voltage: voltage,    // Y-axis data (vertical/left side)
+        ...item
+      };
+    });
+  };
+
+  const powerVoltageData = preparePowerVoltageData();
+
   // Enhanced RMS calculation functions
   const calculateStandardRMS = (column, dataset = data) => {
     const values = dataset.map(item => item[column]).filter(val => typeof val === 'number');
@@ -111,13 +146,6 @@ const Dashboard = () => {
     return rmsMode === 'ac-coupled'
       ? calculateACRMS(column, dataset)
       : calculateStandardRMS(column, dataset);
-  };
-
-  const calculateAverage = (column, dataset = data) => {
-    const values = dataset.map(item => item[column]).filter(val => typeof val === 'number');
-    if (values.length === 0) return '0.000';
-    const sum = values.reduce((sum, val) => sum + val, 0);
-    return (sum / values.length).toFixed(3);
   };
 
   // Statistical analysis functions
@@ -160,6 +188,13 @@ const Dashboard = () => {
     return [min, max];
   };
 
+  const calculateAverage = (column, dataset = electricalData) => {
+    const values = dataset.map(item => item[column]).filter(val => typeof val === 'number');
+    if (values.length === 0) return '0.000';
+    const sum = values.reduce((sum, val) => sum + val, 0);
+    return (sum / values.length).toFixed(3);
+  };
+
   const getImageBase64 = (imgSrc) => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -173,7 +208,6 @@ const Dashboard = () => {
         ctx.fillStyle = 'white';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0);
-
         const dataURL = canvas.toDataURL('image/png', 0.8);
         resolve(dataURL);
       };
@@ -224,14 +258,17 @@ const Dashboard = () => {
     ...item
   }));
 
-  // Enhanced calculations with realistic capped display values
+  const electricalTimeSeriesData = electricalData.map((item, index) => ({
+    time: index,
+    ...item
+  }));
+
   const s1RMS = parseFloat(calculateRMS('S1'));
   const s2RMS = parseFloat(calculateRMS('S2'));
   const transmissibility = s1RMS > 0 ? ((s2RMS / s1RMS) * 100).toFixed(1) : '0.0';
   const transmissibilityValue = parseFloat(transmissibility);
   const isolationEfficiency = s1RMS > 0 ? (((s1RMS - s2RMS) / s1RMS) * 100).toFixed(1) : '0.0';
 
-  // Helper functions for realistic value display
   const getDisplayS2RMS = (actualS2RMS) => {
     const value = parseFloat(actualS2RMS);
     if (value < 2) {
@@ -276,21 +313,15 @@ const Dashboard = () => {
     return "#27ae60";
   };
 
-  // Display values
   const displayTransmissibility = getDisplayTransmissibility(transmissibility);
   const displayS2RMS = getDisplayS2RMS(s2RMS);
   const s2Status = getS2Status(s2RMS);
   const s2Color = getS2Color(s2RMS);
 
-  // Get statistics for main signals
   const s1Stats = getStatistics('S1');
   const s2Stats = getStatistics('S2');
 
-  // ✅ UPDATED: Check if V column exists for voltage data
-  const hasVoltageData = headers.includes('V');
-  const voltageStats = hasVoltageData ? getStatistics('V') : null;
-
-  // Updated PDF generation
+  // ✅ UPDATED PDF GENERATION WITH POWER VS VOLTAGE CHART
   const generatePDFReport = async () => {
     try {
       const doc = new jsPDF();
@@ -309,7 +340,6 @@ const Dashboard = () => {
       const margin = 20;
       let yPosition = 20;
 
-      // Helper function to capture chart as image
       const captureChartAsImage = async (elementSelector, width = 160, height = 100) => {
         try {
           const element = document.querySelector(elementSelector);
@@ -372,13 +402,9 @@ const Dashboard = () => {
         ['Output RMS (S2)', `${displayS2RMS} g rms`],
         ['Transmissibility', `${displayTransmissibility}%`],
         ['Isolation Efficiency', `${isolationEfficiency}%`],
-        ['Signal Samples', data.length.toString()]
+        ['Signal Samples', data.length.toString()],
+        ['Electrical Samples', electricalData.length.toString()]
       ];
-
-      // ✅ UPDATED: Add voltage data if available
-      if (hasVoltageData && voltageStats) {
-        performanceData.push(['Average Voltage', `${calculateAverage('V')} V`]);
-      }
 
       doc.autoTable({
         startY: yPosition,
@@ -397,13 +423,43 @@ const Dashboard = () => {
 
       yPosition = doc.lastAutoTable.finalY + 20;
 
+      // Add Power vs Voltage Chart to PDF
+      if (yPosition > 200) {
+        doc.addPage();
+        yPosition = 20;
+      }
+
+      doc.setFontSize(14);
+      doc.setTextColor(40, 40, 40);
+      doc.text('Power vs Voltage Analysis', margin, yPosition);
+      yPosition += 10;
+
+      const powerVoltageChartImage = await captureChartAsImage(
+        '.power-voltage-chart .oscilloscope-display',
+        160, 100
+      );
+
+      if (powerVoltageChartImage) {
+        doc.addImage(powerVoltageChartImage, 'PNG', margin, yPosition, 160, 100);
+        yPosition += 110;
+        
+        doc.setFontSize(10);
+        doc.setTextColor(100, 100, 100);
+        if (electricalNumericalColumns.includes('Power_W')) {
+          doc.text(`Average Power: ${calculateAverage('Power_W', electricalData)} W`, margin, yPosition);
+        }
+        if (electricalNumericalColumns.includes('Voltage_V')) {
+          doc.text(`Average Voltage: ${calculateAverage('Voltage_V', electricalData)} V`, margin, yPosition + 7);
+        }
+        yPosition += 20;
+      }
+
       // Add Signal Waveforms Charts
       doc.setFontSize(14);
       doc.setTextColor(40, 40, 40);
       doc.text('Signal Waveforms', margin, yPosition);
       yPosition += 10;
 
-      // Capture waveform charts
       const waveformCharts = [];
       for (let i = 0; i < Math.min(numericalColumns.length, 4); i++) {
         const chartImage = await captureChartAsImage(
@@ -419,7 +475,6 @@ const Dashboard = () => {
         }
       }
 
-      // Add waveform charts to PDF (2 per row)
       let chartX = margin;
       let chartY = yPosition;
       const chartWidth = 80;
@@ -456,7 +511,7 @@ const Dashboard = () => {
 
       yPosition = chartY + chartHeight + 30;
 
-      // Add Frequency Distribution Chart
+      // Add Electrical Measurements Chart
       if (yPosition > 200) {
         doc.addPage();
         yPosition = 20;
@@ -464,22 +519,27 @@ const Dashboard = () => {
 
       doc.setFontSize(14);
       doc.setTextColor(40, 40, 40);
-      doc.text('Pattern Distribution', margin, yPosition);
+      doc.text('Electrical Measurements', margin, yPosition);
       yPosition += 10;
 
-      const frequencyChartImage = await captureChartAsImage(
-        '.frequency-panel .recharts-wrapper',
-        160, 80
+      const electricalChartImage = await captureChartAsImage(
+        '.waveform-section:nth-child(2) .oscilloscope-display',
+        160, 100
       );
 
-      if (frequencyChartImage) {
-        doc.addImage(frequencyChartImage, 'PNG', margin, yPosition, 160, 80);
-        yPosition += 90;
+      if (electricalChartImage) {
+        doc.addImage(electricalChartImage, 'PNG', margin, yPosition, 160, 100);
+        yPosition += 110;
         
         doc.setFontSize(10);
         doc.setTextColor(100, 100, 100);
-        doc.text(`Total Patterns: ${frequencyChartData.length}`, margin, yPosition);
-        yPosition += 15;
+        if (electricalNumericalColumns.includes('Voltage_V')) {
+          doc.text(`Average Voltage: ${calculateAverage('Voltage_V', electricalData)} V`, margin, yPosition);
+        }
+        if (electricalNumericalColumns.includes('Current_mA')) {
+          doc.text(`Average Current: ${calculateAverage('Current_mA', electricalData)} mA`, margin, yPosition + 7);
+        }
+        yPosition += 20;
       }
 
       // Detailed Statistics
@@ -504,11 +564,6 @@ const Dashboard = () => {
           ['Maximum', `${s1Stats.max} g`, `${s2Stats.max} g`],
           ['Crest Factor', s1Stats.crestFactor, s2Stats.crestFactor]
         ];
-
-        // ✅ UPDATED: Add voltage statistics if available
-        if (hasVoltageData && voltageStats) {
-          statsData.push(['Voltage Stats', `Avg: ${calculateAverage('V')}V`, `Range: ${voltageStats.min}-${voltageStats.max}V`]);
-        }
 
         doc.autoTable({
           startY: yPosition,
@@ -539,7 +594,7 @@ const Dashboard = () => {
       const fileName = `SphereNext_Signal_Report_${new Date().toISOString().split('T')[0]}_${new Date().toLocaleTimeString().replace(/:/g, '-')}.pdf`;
       doc.save(fileName);
 
-      console.log('PDF generated successfully');
+      console.log('PDF with charts generated successfully');
 
     } catch (error) {
       console.error('PDF generation failed:', error);
@@ -630,15 +685,6 @@ const Dashboard = () => {
               )}
             </div>
           </div>
-          {/* ✅ UPDATED: Add voltage information if available */}
-          {hasVoltageData && voltageStats && (
-            <div style={{ marginTop: '10px' }}>
-              <strong>Voltage (V) Statistics:</strong>
-              <span style={{ color: '#f39c12' }}>
-                Avg: {calculateAverage('V')}V | Range: {voltageStats.min}-{voltageStats.max}V | RMS: {voltageStats.standardRMS}V
-              </span>
-            </div>
-          )}
           <div style={{ marginTop: '10px' }}>
             <strong>Current Values:</strong>
             <span style={{ color: '#2ecc71' }}>
@@ -654,7 +700,7 @@ const Dashboard = () => {
         {/* Signal Waveforms */}
         <div className="waveform-section">
           <div className="section-title">
-            Signal Waveforms (S1↔S2 Interchanged)
+            Signal Waveforms
           </div>
 
           <div className="waveform-grid">
@@ -662,7 +708,6 @@ const Dashboard = () => {
               const stats = getStatistics(column);
               const isS2Column = column === 'S2';
 
-              // Interchange display labels
               let displayLabel = column;
               if (column === 'S1') {
                 displayLabel = 'S2';
@@ -670,7 +715,6 @@ const Dashboard = () => {
                 displayLabel = 'S1';
               }
 
-              // Interchange displayed RMS values
               let displayRMSValue;
               if (column === 'S1') {
                 displayRMSValue = displayS2RMS;
@@ -688,11 +732,11 @@ const Dashboard = () => {
                     </span>
                     <div className="signal-metrics">
                       <span className="rms-value">
-                        {displayRMSValue} {column === 'V' ? 'V' : 'g'} {column === 'V' ? 'avg' : 'rms'}
+                        {displayRMSValue} g rms
                       </span>
                       {stats && (
                         <div style={{ fontSize: '10px', color: '#95a5a6' }}>
-                          Peak: {stats.max}{column === 'V' ? 'V' : 'g'} | DC: {stats.mean}{column === 'V' ? 'V' : 'g'}
+                          Peak: {stats.max}g | DC: {stats.mean}g
                         </div>
                       )}
                     </div>
@@ -703,8 +747,8 @@ const Dashboard = () => {
                       <LineChart data={timeSeriesData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
                         <defs>
                           <linearGradient id={`gradient-${index}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={column === 'V' ? "#FFD700" : (index % 2 === 0 ? "#00ff41" : "#ff0080")} stopOpacity={0.8} />
-                            <stop offset="100%" stopColor={column === 'V' ? "#FFD700" : (index % 2 === 0 ? "#00ff41" : "#ff0080")} stopOpacity={0.1} />
+                            <stop offset="0%" stopColor={index % 2 === 0 ? "#00ff41" : "#ff0080"} stopOpacity={0.8} />
+                            <stop offset="100%" stopColor={index % 2 === 0 ? "#00ff41" : "#ff0080"} stopOpacity={0.1} />
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="1 1" stroke="#333" opacity={0.5} />
@@ -731,7 +775,7 @@ const Dashboard = () => {
                         <Line
                           type="monotone"
                           dataKey={column}
-                          stroke={column === 'V' ? "#FFD700" : (index % 2 === 0 ? "#00ff41" : "#ff0080")}
+                          stroke={index % 2 === 0 ? "#00ff41" : "#ff0080"}
                           strokeWidth={1.5}
                           dot={false}
                           fill={`url(#gradient-${index})`}
@@ -745,12 +789,191 @@ const Dashboard = () => {
           </div>
         </div>
 
+        {/* Electrical Measurements */}
+        <div className="waveform-section">
+          <div className="section-title">Electrical Measurements</div>
+
+          <div className="waveform-grid">
+            {(electricalNumericalColumns.includes('Voltage_V') || electricalNumericalColumns.includes('Current_mA')) && (
+              <div className="waveform-container" style={{ width: '100%' }}>
+                <div className="waveform-header">
+                  <span className="signal-label">Voltage and Current</span>
+                  <span className="rms-value">
+                    {electricalNumericalColumns.includes('Voltage_V') && `${calculateAverage('Voltage_V', electricalData)} V avg`} {' '}
+                    {electricalNumericalColumns.includes('Voltage_V') && electricalNumericalColumns.includes('Current_mA') && '|'} {' '}
+                    {electricalNumericalColumns.includes('Current_mA') && `${calculateAverage('Current_mA', electricalData)} mA avg`}
+                  </span>
+                </div>
+
+                <div className="oscilloscope-display">
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={electricalTimeSeriesData} margin={{ top: 5, right: 30, left: 5, bottom: 5 }}>
+                      <defs>
+                        <linearGradient id="voltage-gradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#FFD700" stopOpacity={0.8} />
+                          <stop offset="100%" stopColor="#FFD700" stopOpacity={0.1} />
+                        </linearGradient>
+                        <linearGradient id="current-gradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#00BFFF" stopOpacity={0.8} />
+                          <stop offset="100%" stopColor="#00BFFF" stopOpacity={0.1} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="1 1" stroke="#333" opacity={0.5} />
+                      <XAxis
+                        dataKey="time"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 10, fill: '#888' }}
+                      />
+
+                      <YAxis
+                        yAxisId="voltage"
+                        orientation="left"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 10, fill: '#FFD700' }}
+                        label={{ value: 'Voltage (V)', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#FFD700' } }}
+                        domain={electricalNumericalColumns.includes('Voltage_V') ? getExactDataRange('Voltage_V', electricalData) : ['auto', 'auto']}
+                      />
+
+                      <YAxis
+                        yAxisId="current"
+                        orientation="right"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 10, fill: '#00BFFF' }}
+                        label={{ value: 'Current (mA)', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: '#00BFFF' } }}
+                        domain={electricalNumericalColumns.includes('Current_mA') ? getExactDataRange('Current_mA', electricalData) : ['auto', 'auto']}
+                      />
+
+                      {electricalNumericalColumns.includes('Voltage_V') && (
+                        <Line
+                          yAxisId="voltage"
+                          type="monotone"
+                          dataKey="Voltage_V"
+                          stroke="#FFD700"
+                          strokeWidth={2}
+                          dot={false}
+                          name="Voltage (V)"
+                        />
+                      )}
+
+                      {electricalNumericalColumns.includes('Current_mA') && (
+                        <Line
+                          yAxisId="current"
+                          type="monotone"
+                          dataKey="Current_mA"
+                          stroke="#00BFFF"
+                          strokeWidth={2}
+                          dot={false}
+                          name="Current (mA)"
+                        />
+                      )}
+
+                      <Legend verticalAlign="top" height={36} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ✅ NEW: Power vs Voltage Chart - Power on X-axis (bottom), Voltage on Y-axis (left) */}
+        <div className="waveform-section power-voltage-chart">
+          <div className="section-title">Power vs Voltage Analysis</div>
+          
+          <div className="waveform-grid">
+            <div className="waveform-container" style={{ width: '100%' }}>
+              <div className="waveform-header">
+                <span className="signal-label">Platform Voltage vs Power Relationship</span>
+                <span className="rms-value">
+                  {electricalNumericalColumns.includes('Power_W') && 
+                   `Avg Power: ${calculateAverage('Power_W', electricalData)} W`}
+                </span>
+              </div>
+
+              <div className="oscilloscope-display">
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart 
+                    data={powerVoltageData} 
+                    margin={{ top: 5, right: 30, left: 40, bottom: 40 }}
+                  >
+                    <defs>
+                      <linearGradient id="voltage-power-gradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#FF6B35" stopOpacity={0.8} />
+                        <stop offset="100%" stopColor="#FF6B35" stopOpacity={0.1} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="1 1" stroke="#333" opacity={0.5} />
+                    
+                    {/* ✅ X-axis shows Power (bottom/horizontal) */}
+                    <XAxis
+                      dataKey="power"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 10, fill: '#888' }}
+                      label={{ 
+                        value: 'Platform Power (W)', 
+                        position: 'insideBottom', 
+                        offset: -15,
+                        style: { textAnchor: 'middle', fill: '#888', fontSize: '12px' }
+                      }}
+                    />
+                    
+                    {/* ✅ Y-axis shows Voltage (left side/vertical) */}
+                    <YAxis
+                      dataKey="voltage" 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 10, fill: '#888' }}
+                      label={{ 
+                        value: 'Platform Voltage (V)', 
+                        angle: -90, 
+                        position: 'insideLeft',
+                        style: { textAnchor: 'middle', fill: '#888', fontSize: '12px' }
+                      }}
+                    />
+                    
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#000',
+                        border: '1px solid #333',
+                        borderRadius: '4px',
+                        color: '#fff',
+                        fontSize: '12px'
+                      }}
+                      formatter={(value, name) => {
+                        if (name === 'voltage') {
+                          return [`${value.toFixed(3)} V`, 'Platform Voltage'];
+                        }
+                        return [`${value.toFixed(3)} W`, 'Platform Power'];
+                      }}
+                      labelFormatter={(label) => `Data Point: ${label}`}
+                    />
+                    
+                    {/* ✅ Line plots Voltage (Y) against Power (X) */}
+                    <Line
+                      type="monotone"
+                      dataKey="voltage"
+                      stroke="#FF6B35"
+                      strokeWidth={2}
+                      dot={{ fill: '#FF6B35', strokeWidth: 2, r: 4 }}
+                      activeDot={{ r: 6, stroke: '#FF6B35', strokeWidth: 2, fill: '#fff' }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Metrics and Analysis */}
         <div className="metrics-analysis-row">
 
           {/* Current Signal Values */}
           <div className="current-values-panel">
-            <div className="panel-header">Current Values (S1↔S2 Interchanged)</div>
+            <div className="panel-header">Current Signal Values (S1↔S2 Interchanged)</div>
             <div className="values-grid">
               {headers.slice(0, 6).map(header => (
                 <div className="value-item" key={header}>
@@ -761,6 +984,23 @@ const Dashboard = () => {
                     {typeof latestEntry[header] === 'number'
                       ? latestEntry[header].toFixed(3)
                       : latestEntry[header]}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Current Electrical Values */}
+          <div className="current-values-panel">
+            <div className="panel-header">Current Electrical Values</div>
+            <div className="values-grid">
+              {latestElectricalEntry && electricalHeaders.slice(0, 6).map(header => (
+                <div className="value-item" key={header}>
+                  <div className="value-label">{header}</div>
+                  <div className="value-display">
+                    {typeof latestElectricalEntry[header] === 'number'
+                      ? latestElectricalEntry[header].toFixed(3)
+                      : latestElectricalEntry[header]}
                   </div>
                 </div>
               ))}
@@ -797,15 +1037,6 @@ const Dashboard = () => {
                 <div className="metric-value">{isolationEfficiency}</div>
                 <div className="metric-unit">%</div>
               </div>
-
-              {/* ✅ UPDATED: Add voltage metric if available */}
-              {hasVoltageData && (
-                <div className="metric-box voltage-metric">
-                  <div className="metric-label">Voltage</div>
-                  <div className="metric-value">{calculateAverage('V')}</div>
-                  <div className="metric-unit">V avg</div>
-                </div>
-              )}
 
             </div>
           </div>
@@ -863,12 +1094,15 @@ const Dashboard = () => {
           </div>
           <div className="data-info">
             <span>Signal Samples: {data.length}</span>
+            <span>Electrical Samples: {electricalData.length}</span>
             <span>Unique Patterns: {frequencyChartData.length}</span>
             <span>RMS Mode: {rmsMode.toUpperCase()}</span>
             <span>S1↔S2 INTERCHANGED</span>
             <span>S2: {displayS2RMS}g (2-5g Range)</span>
             <span>Transmissibility: {displayTransmissibility}% (25-50% Range)</span>
-            {hasVoltageData && <span>Voltage: {calculateAverage('V')}V</span>}
+            <span>Avg Power: {electricalData.length > 0 && electricalNumericalColumns.includes('Power_W') ? 
+              calculateAverage('Power_W', electricalData) : '0.000'} W
+            </span>
             <span>Rate: 1 Hz</span>
           </div>
         </div>
